@@ -1,0 +1,45 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "market-scanner-620",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-11",
+  "workers_dev": true,
+  "preview_urls": false,
+  "triggers": {
+    "crons": ["1-56/5 * * * MON-FRI"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "secrets": {
+    "required": [
+      "ALPACA_KEY_ID",
+      "ALPACA_SECRET_KEY",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_CHAT_ID",
+      "API_TOKEN",
+      "WEB_PASSWORD"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "market-scanner-620",
+      "database_id": "df9d91a3-80ca-48ca-a51b-64b96cb11791",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "ALPACA_DATA_URL": "https://data.alpaca.markets",
+    "ALPACA_FEED": "iex",
+    "TELEGRAM_API_URL": "https://api.telegram.org",
+    "WEB_SESSION_TTL_DAYS": "30",
+    "SCANNER_SETUP_LIMIT": "60",
+    "SCANNER_MIN_QUALITY": "3",
+    "SCANNER_LOOKBACK_DAYS": "7",
+    "STALE_THRESHOLD_MIN": "15",
+    "NOTIFY_MAX_ATTEMPTS": "3",
+    "NOTIFY_RETRY_BACKOFF_MS": "2000"
+  }
+}

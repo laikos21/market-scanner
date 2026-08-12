@@ -1,0 +1,28 @@
+{
+  "name": "market-scanner-620",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && vitest run && wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:dry": "wrangler deploy --dry-run --outdir dist",
+    "dev": "wrangler dev",
+    "db:create": "wrangler d1 create market-scanner-620",
+    "db:migrate:local": "wrangler d1 migrations apply market-scanner-620 --local",
+    "db:migrate:remote": "wrangler d1 migrations apply market-scanner-620 --remote",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.21.0",
+    "@cloudflare/workers-types": "5.20260811.1",
+    "@types/node": "22.15.17",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10",
+    "wrangler": "4.120.1"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "1.3.0"
+  }
+}
