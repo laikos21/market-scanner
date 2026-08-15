@@ -17,7 +17,9 @@ export interface Env {
   WEB_PASSWORD: string;
   WEB_SESSION_TTL_DAYS: string;
   SCANNER_SETUP_LIMIT: string;
+  SCANNER_WARMUP_BATCH_SIZE: string;
   SCANNER_MIN_QUALITY: string;
+  SCANNER_PBA_MAX_RISK_PCT: string;
   SCANNER_LOOKBACK_DAYS: string;
   STALE_THRESHOLD_MIN: string;
   NOTIFY_MAX_ATTEMPTS: string;
@@ -43,7 +45,9 @@ export interface IndicatorState {
   macd: number | null;
   lastBarTs: string | null;
   recentCloses: number[];
+  recentOpens?: number[];
   recentHighs: number[];
+  recentLows?: number[];
   recentVolumes: number[];
   recentEma20: number[];
   recentHistograms: number[];
@@ -54,6 +58,9 @@ export interface SetupRuntimeState {
   indicator: IndicatorState;
   macdCrossBarTs: string | null;
   macdCrossPrice: number | null;
+  macdCrossBaseLow?: number | null;
+  macdCrossRiskPct?: number | null;
+  earlyAlertSent?: boolean;
   confirmationBarsElapsed: number;
   triggerCount: number;
   lastAlertAt: string | null;

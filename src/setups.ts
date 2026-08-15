@@ -12,7 +12,7 @@ export interface SetupInput {
 }
 
 function enabledLimit(env: Env): number {
-  return integerSetting("SCANNER_SETUP_LIMIT", env.SCANNER_SETUP_LIMIT, 60, 1, 100);
+  return integerSetting("SCANNER_SETUP_LIMIT", env.SCANNER_SETUP_LIMIT, 120, 1, 200);
 }
 
 export async function addSetup(
@@ -32,7 +32,7 @@ export async function addSetup(
       id: loaded.document.nextSetupId,
       symbol: input.symbol,
       enabled: true,
-      signalPeriod: input.signalPeriod ?? 10,
+      signalPeriod: input.signalPeriod ?? 9,
       confirmationWindowBars: input.confirmationWindowBars ?? 6,
       note: input.note ?? "",
       source: input.source?.trim() || undefined,

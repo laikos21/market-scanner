@@ -36,7 +36,7 @@ export const WEB_HTML = String.raw`<!doctype html>
     <section class="intro">
       <div>
         <h2>Watchlist armada</h2>
-        <p>Detecta MACD 6/20 bullish cross y espera la confirmación EMA6/EMA20. Solo procesa velas RTH cerradas.</p>
+        <p>Perfil PBA low-risk: detecta MACD 6/20/9 sobre una base estable, calcula el riesgo al mínimo y luego espera la confirmación EMA6/EMA20. Solo procesa velas RTH cerradas.</p>
       </div>
       <div id="cycle" class="cycle">Sin ciclos registrados</div>
     </section>
@@ -55,10 +55,10 @@ export const WEB_HTML = String.raw`<!doctype html>
       <div class="bulk-fields">
         <label>Origen<input id="bulk-source" maxlength="80" value="PULSE Leaders"></label>
         <label>Contexto<input id="bulk-note" maxlength="200" value="EMA21 Pullback · PULSE Leaders"></label>
-        <label>Señal MACD<select id="bulk-signal"><option value="10" selected>10 (original)</option><option value="9">9</option></select></label>
+        <label>Señal MACD<select id="bulk-signal"><option value="9" selected>9 (PBA)</option><option value="10">10 (Morales)</option></select></label>
         <label>Ventana<select id="bulk-window"><option value="3">3 velas</option><option value="6" selected>6 velas</option><option value="9">9 velas</option><option value="12">12 velas</option></select></label>
       </div>
-      <div class="bulk-actions"><button id="bulk-preview" class="secondary">Previsualizar importación</button><button id="bulk-import" disabled>Importar nuevos</button></div>
+      <div class="bulk-actions"><button id="bulk-preview" class="secondary">Previsualizar importación</button><button id="bulk-import" disabled>Primero previsualizá</button></div>
       <p id="bulk-error" class="error"></p>
       <div id="bulk-preview-output" class="bulk-preview hidden"></div>
     </section>
@@ -67,7 +67,7 @@ export const WEB_HTML = String.raw`<!doctype html>
       <form id="setup-form" class="setup-form">
         <label>Ticker<input id="symbol" maxlength="16" placeholder="NVDA" required></label>
         <label>Señal MACD
-          <select id="signal"><option value="10">10 (original)</option><option value="9">9</option></select>
+          <select id="signal"><option value="9" selected>9 (PBA)</option><option value="10">10 (Morales)</option></select>
         </label>
         <label>Ventana
           <select id="window"><option value="3">3 velas</option><option value="6" selected>6 velas</option><option value="9">9 velas</option><option value="12">12 velas</option></select>
@@ -100,7 +100,8 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 20% -10%
 button,input,select { font:inherit; }
 button { border:0; border-radius:10px; padding:10px 15px; background:var(--blue); color:#08101e; font-weight:750; cursor:pointer; }
 button:hover { filter:brightness(1.08); }
-button:disabled { opacity:.55; cursor:wait; }
+button:disabled { opacity:.55; cursor:not-allowed; }
+button.busy,button.busy:disabled { cursor:wait; }
 button.secondary { background:#23334f; color:var(--text); }
 button.ghost { background:transparent; color:var(--muted); }
 button.danger { background:#3a2029; color:#ff9da5; }
@@ -181,7 +182,17 @@ const $ = (selector) => document.querySelector(selector);
 const mutationHeaders = { "content-type":"application/json", "x-market-scanner-web":"confirm" };
 
 async function api(path, options={}) {
-  const response = await fetch(path, { ...options, headers:{...(options.headers||{})}, cache:"no-store" });
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),20000);
+  let response;
+  try {
+    response = await fetch(path, { ...options, headers:{...(options.headers||{})}, cache:"no-store", signal:options.signal||controller.signal });
+  } catch(error) {
+    if (error?.name==="AbortError") throw new Error("La operación tardó demasiado. Volvé a intentar.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
   if (response.status === 401) { showLogin(); throw new Error("Sesión vencida"); }
   const body = response.status === 204 ? null : await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body?.error || body?.detail || "HTTP " + response.status);
@@ -221,15 +232,33 @@ function renderSetup(setup) {
   return article;
 }
 
+const DISPLAY_TIME_ZONE = "America/Argentina/Buenos_Aires";
+function fmtArt(iso) {
+  if (!iso) return "—";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(new Date(iso));
+  const get = (type) => parts.find((part) => part.type === type)?.value || "";
+  return get("year") + "-" + get("month") + "-" + get("day") + " "
+    + get("hour") + ":" + get("minute") + ":" + get("second") + " ART";
+}
+
 async function refresh() {
   const [setupsData,health,eventsData]=await Promise.all([api("/api/scanner/setups"),api("/api/scanner/health").catch(e=>({status:"red",problems:[e.message]})),api("/api/scanner/events")]);
   hideLogin();
   const root=$("#setups"); root.replaceChildren(...setupsData.setups.map(renderSetup));
   $("#empty").classList.toggle("hidden",setupsData.setups.length!==0);
   const healthNode=$("#health"); healthNode.className="badge "+(health.status==="green"?"green":health.status==="amber"?"amber":"red"); healthNode.textContent=health.status.toUpperCase(); healthNode.title=(health.problems||[]).join("\n");
-  const cycle=health.lastCycle; $("#cycle").textContent=cycle ? "Último ciclo: "+new Date(cycle.startedAt).toLocaleString()+" · "+cycle.barsProcessed+" velas · "+(cycle.earlySignals+cycle.confirmedSignals)+" señales" : "Sin ciclos registrados";
+  const cycle=health.lastCycle; $("#cycle").textContent=cycle ? "Último ciclo: "+fmtArt(cycle.startedAt)+" · "+cycle.barsProcessed+" velas · "+(cycle.earlySignals+cycle.confirmedSignals)+" señales" : "Sin ciclos registrados";
   const events=$("#events");
-  if(!eventsData.events.length){events.innerHTML='<p class="muted">Sin eventos.</p>';}else{events.replaceChildren(...eventsData.events.map(event=>{const row=document.createElement("div");row.className="event";row.innerHTML='<span class="event-kind"></span><strong></strong><span></span><time></time>';const kind=row.querySelector(".event-kind");kind.className="event-kind "+event.kind;kind.textContent=event.kind;row.querySelector("strong").textContent=event.symbol||"Sistema";row.querySelector("span:nth-of-type(2)").textContent=event.message.split("\n")[0];row.querySelector("time").textContent=new Date(event.created_at_utc).toLocaleString();return row;}));}
+  if(!eventsData.events.length){events.innerHTML='<p class="muted">Sin eventos.</p>';}else{events.replaceChildren(...eventsData.events.map(event=>{const row=document.createElement("div");row.className="event";row.innerHTML='<span class="event-kind"></span><strong></strong><span></span><time></time>';const kind=row.querySelector(".event-kind");kind.className="event-kind "+event.kind;kind.textContent=event.kind;row.querySelector("strong").textContent=event.symbol||"Sistema";row.querySelector("span:nth-of-type(2)").textContent=event.message.split("\n")[0];row.querySelector("time").textContent=fmtArt(event.created_at_utc);return row;}));}
 }
 
 let bulkPreviewState=null;
@@ -237,14 +266,14 @@ let pulseImportPending=false;
 function setupPulseBookmarklet() {
   const link=$("#pulse-bookmarklet");
   if (!link) return;
-  const bookmarklet = "javascript:(async()=>{const s=new Set();const pick=()=>{document.querySelectorAll('article').forEach(e=>{const t=(e.innerText||e.textContent||'').trim();const m=t.match(/^([A-Z][A-Z0-9.\\-]{0,15})(?=[A-Z][a-z])/);const f=m?m[1]:(t.match(/^[A-Z][A-Z0-9.\\-]*/)||[''])[0];if(/^[A-Z][A-Z0-9.\\-]{0,15}$/.test(f))s.add(f);});};for(let i=0;i<40;i++){pick();const n=[...document.querySelectorAll('button')].find(b=>/^Next/.test((b.innerText||b.textContent||'').trim())&&!b.disabled);if(!n)break;n.click();await new Promise(r=>setTimeout(r,500));}const u="+JSON.stringify(location.origin)+"+'/?pulse='+encodeURIComponent([...s].join(','))+'&source='+encodeURIComponent(document.title||'PULSE');location.href=u;})()";
+  const bookmarklet = "javascript:(async()=>{const s=new Set();const pick=()=>{document.querySelectorAll('article').forEach(e=>{const t=(e.innerText||e.textContent||'').trim();const m=t.match(/^([A-Z][A-Z0-9.\\-]{0,15})(?=[A-Z][a-z])/);const f=m?m[1]:(t.match(/^[A-Z][A-Z0-9.\\-]*/)||[''])[0];const c=f.replace(/(?:ENTERED|EXITED)$/,'');if(/^[A-Z][A-Z0-9.\\-]{0,15}$/.test(c))s.add(c);});};for(let i=0;i<40;i++){pick();const n=[...document.querySelectorAll('button')].find(b=>/^Next/.test((b.innerText||b.textContent||'').trim())&&!b.disabled);if(!n)break;n.click();await new Promise(r=>setTimeout(r,500));}const u="+JSON.stringify(location.origin)+"+'/?pulse='+encodeURIComponent([...s].join(','))+'&source='+encodeURIComponent(document.title||'PULSE');location.href=u;})()";
   link.href=bookmarklet;
 }
 function loadPulseImportFromUrl() {
   const params=new URLSearchParams(location.search);
   const symbols=params.get("pulse");
   if (!symbols) return;
-  $("#bulk-text").value=symbols.split(",").map(value=>value.trim()).filter(Boolean).join("\n");
+  $("#bulk-text").value=symbols.split(",").map(value=>value.trim().toUpperCase().replace(/(?:ENTERED|EXITED)$/,"")).filter(Boolean).join("\n");
   $("#bulk-source").value=params.get("source")||"PULSE";
   pulseImportPending=true;
   history.replaceState({},"",location.pathname);
@@ -280,11 +309,14 @@ function renderBulkPreview(preview) {
   const status=document.createElement("p"); status.className="bulk-list "+(preview.canImport?"":"error"); status.textContent=preview.canImport ? "Listo para importar: "+preview.newSymbols.length+" setup(s) habilitado(s)." : (preview.newSymbols.length ? "No hay cupo suficiente; aumentá el límite o importá menos símbolos." : "No hay símbolos nuevos para importar."); node.append(status);
   node.classList.remove("hidden");
   $("#bulk-import").disabled=!preview.canImport;
+  $("#bulk-import").textContent=preview.canImport
+    ? "Importar "+preview.newSymbols.length+" nuevos"
+    : (preview.newSymbols.length ? "Sin cupo suficiente" : "No hay nuevos");
 }
-function resetBulkPreview() { bulkPreviewState=null; $("#bulk-import").disabled=true; $("#bulk-preview-output").classList.add("hidden"); }
+function resetBulkPreview() { bulkPreviewState=null; $("#bulk-import").disabled=true; $("#bulk-import").textContent="Primero previsualizá"; $("#bulk-preview-output").classList.add("hidden"); }
 ["#bulk-text","#bulk-source","#bulk-note","#bulk-signal","#bulk-window"].forEach(selector=>$(selector).addEventListener("input",resetBulkPreview));
-$("#bulk-preview").addEventListener("click",async()=>{const button=$("#bulk-preview");$("#bulk-error").textContent="";button.disabled=true;resetBulkPreview();try{const result=await api("/api/scanner/import/preview",{method:"POST",headers:mutationHeaders,body:JSON.stringify(bulkPayload())});bulkPreviewState=result.preview;renderBulkPreview(bulkPreviewState);}catch(error){$("#bulk-error").textContent=error.message;}finally{button.disabled=false;}});
-$("#bulk-import").addEventListener("click",async()=>{if(!bulkPreviewState||!bulkPreviewState.canImport)return;const count=bulkPreviewState.newSymbols.length;if(!confirm("Agregar "+count+" setup(s) de "+($("#bulk-source").value.trim()||"importación bulk")+"?"))return;const button=$("#bulk-import");$("#bulk-error").textContent="";button.disabled=true;try{const result=await api("/api/scanner/import",{method:"POST",headers:{...mutationHeaders,"x-market-scanner":"confirm"},body:JSON.stringify(bulkPayload())});$("#bulk-text").value="";resetBulkPreview();await refresh();toast("Importados "+result.created.length+" setup(s) 620");}catch(error){$("#bulk-error").textContent=error.message;button.disabled=false;}});
+$("#bulk-preview").addEventListener("click",async()=>{const button=$("#bulk-preview");const label=button.textContent;$("#bulk-error").textContent="";button.disabled=true;button.classList.add("busy");button.textContent="Previsualizando…";resetBulkPreview();try{const result=await api("/api/scanner/import/preview",{method:"POST",headers:mutationHeaders,body:JSON.stringify(bulkPayload())});bulkPreviewState=result.preview;renderBulkPreview(bulkPreviewState);}catch(error){$("#bulk-error").textContent=error.message;}finally{button.disabled=false;button.classList.remove("busy");button.textContent=label;}});
+$("#bulk-import").addEventListener("click",async()=>{if(!bulkPreviewState||!bulkPreviewState.canImport)return;const count=bulkPreviewState.newSymbols.length;if(!confirm("Agregar "+count+" setup(s) de "+($("#bulk-source").value.trim()||"importación bulk")+"?"))return;const button=$("#bulk-import");$("#bulk-error").textContent="";button.disabled=true;button.classList.add("busy");button.textContent="Importando…";try{const result=await api("/api/scanner/import",{method:"POST",headers:{...mutationHeaders,"x-market-scanner":"confirm"},body:JSON.stringify(bulkPayload())});$("#bulk-text").value="";resetBulkPreview();await refresh();toast("Importados "+result.created.length+" setup(s) 620");}catch(error){$("#bulk-error").textContent=error.message;button.disabled=false;button.textContent="Importar "+count+" nuevos";}finally{button.classList.remove("busy");}});
 
 $("#login-form").addEventListener("submit",async(event)=>{event.preventDefault();$("#login-error").textContent="";try{await api("/api/session",{method:"POST",headers:mutationHeaders,body:JSON.stringify({password:$("#password").value})});$("#password").value="";await refresh();await previewPulseImportFromUrl();}catch(error){$("#login-error").textContent=error.message;}});
 $("#setup-form").addEventListener("submit",async(event)=>{event.preventDefault();$("#form-error").textContent="";const button=event.submitter;button.disabled=true;try{await api("/api/scanner/setups",{method:"POST",headers:mutationHeaders,body:JSON.stringify({symbol:$("#symbol").value.trim().toUpperCase(),signalPeriod:Number($("#signal").value),confirmationWindowBars:Number($("#window").value),note:$("#note").value.trim()})});$("#symbol").value="";$("#note").value="";await refresh();toast("Setup 620 armado");}catch(error){$("#form-error").textContent=error.message;}finally{button.disabled=false;}});

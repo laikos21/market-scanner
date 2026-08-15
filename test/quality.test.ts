@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emptyIndicatorState } from "../src/indicators";
-import { evaluateSignalQuality } from "../src/quality";
+import { evaluatePbaEntry, evaluateSignalQuality } from "../src/quality";
 import type { Bar } from "../src/types";
 
 function bar(close: number, volume: number): Bar {
@@ -48,5 +48,60 @@ describe("620 quality gate", () => {
     const result = evaluateSignalQuality(indicator, bar(100, 80));
     expect(result.score).toBe(0);
     expect(result.grade).toBe("C");
+  });
+});
+
+describe("PBA low-risk entry", () => {
+  it("recognizes a rounded MACD turn above an established base with tight risk", () => {
+    const currentBar: Bar = {
+      symbol: "PL",
+      ts: "2026-08-12T15:30:00Z",
+      open: 24.35,
+      high: 24.52,
+      low: 24.32,
+      close: 24.49,
+      volume: 1300,
+    };
+    const indicator = {
+      ...emptyIndicatorState(),
+      recentOpens: [24.32, 24.31, 24.34, 24.36, 24.38, 24.35],
+      recentHighs: [24.38, 24.37, 24.39, 24.41, 24.43, 24.52],
+      recentLows: [24.28, 24.3, 24.31, 24.33, 24.34, 24.32],
+      recentCloses: [24.34, 24.33, 24.37, 24.39, 24.41, 24.49],
+      recentHistograms: [-0.12, -0.09, -0.06, -0.03, -0.01, 0.02],
+    };
+
+    const result = evaluatePbaEntry(indicator, currentBar, 1.25);
+
+    expect(result.eligible).toBe(true);
+    expect(result.baseLow).toBe(24.28);
+    expect(result.baseBars).toBe(5);
+    expect(result.riskPct).toBeCloseTo(0.86, 1);
+  });
+
+  it("rejects an otherwise valid turn when the base is too far away", () => {
+    const currentBar: Bar = {
+      symbol: "PL",
+      ts: "2026-08-12T15:30:00Z",
+      open: 24.8,
+      high: 25.05,
+      low: 24.78,
+      close: 25,
+      volume: 1300,
+    };
+    const indicator = {
+      ...emptyIndicatorState(),
+      recentOpens: [24.32, 24.31, 24.34, 24.36, 24.7, 24.8],
+      recentHighs: [24.38, 24.37, 24.39, 24.41, 24.75, 25.05],
+      recentLows: [24.28, 24.3, 24.31, 24.33, 24.65, 24.78],
+      recentCloses: [24.34, 24.33, 24.37, 24.39, 24.72, 25],
+      recentHistograms: [-0.12, -0.09, -0.06, -0.03, -0.01, 0.02],
+    };
+
+    const result = evaluatePbaEntry(indicator, currentBar, 1.25);
+
+    expect(result.eligible).toBe(false);
+    expect(result.riskPct).toBeGreaterThan(1.25);
+    expect(result.summary).toContain("> 1.25%");
   });
 });

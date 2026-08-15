@@ -8,6 +8,19 @@ It intentionally does **not** generate a complete trading thesis. You select a t
 its Daily chart and location are already interesting; MarketScanner answers when the 5-minute
 timing sequence appears.
 
+## PBA 620 revision
+
+The previous GitHub revision implemented the older conservative interpretation: signal period
+10 by default and one global 3/4 continuation-quality gate for both the early MACD cross and the
+later EMA confirmation. That gate systematically favored a later entry and could suppress the
+low-risk turn PBA was trying to capture.
+
+This revision is the new PBA-focused 620 model. It was derived from a direct review of PBA's
+Planet Labs five-minute screenshot and video transcript, followed by replays of multiple rule
+variants across two sessions and the 89 live MarketScanner setups. The selected policy preserves
+closed-bar safety while moving early acceptance to observable base/risk geometry. TypeScript,
+the Worker dry build and 27 offline tests validate the publication checkout.
+
 ## Signal contract
 
 Default configuration:
@@ -15,20 +28,23 @@ Default configuration:
 - timeframe: 5 minutes;
 - session: NYSE/Nasdaq regular trading hours only;
 - MACD line: `EMA(close, 6) - EMA(close, 20)`;
-- signal line: `EMA(MACD, 10)`, optionally 9 per ticker;
-- early signal: MACD crosses bullish while EMA6 is still at/below EMA20;
-- confirmation: EMA6 crosses above EMA20 within 6 bars (configurable 1â€“24);
-- quality gate: Telegram alerts default to score 3/4 (EMA20 slope, local breakout, volume
-  support and MACD histogram strength);
+- signal line: `EMA(MACD, 9)` by default for the PBA profile; period 10 remains available;
+- early signal: MACD crosses bullish while EMA6 is still at/below EMA20, after a stable
+  five-minute base, a rounded histogram turn and a firm micropivot recovery;
+- confirmation: EMA6 crosses above EMA20 within 6 bars (configurable 1–24);
+- low-risk gate: the reference close must be no more than `SCANNER_PBA_MAX_RISK_PCT`
+  (default `1.25%`) above the recent base low;
+- continuation quality: the existing 4-point score remains visible and filters a late EMA
+  confirmation only when no PBA early alert was sent;
 - evaluation: closed bars only;
 - warm-up: 60 or more historical bars, always silent.
 
 State flow:
 
 ```text
-priming â†’ waiting_macd â†’ waiting_ema â†’ confirmed
-                         â†˜ expired / invalidated â†’ waiting_macd
-confirmed â†’ both MACD and EMA bearish â†’ waiting_macd
+priming → waiting_macd → waiting_ema → confirmed
+                         ↘ expired / invalidated → waiting_macd
+confirmed → both MACD and EMA bearish → waiting_macd
 ```
 
 The panel lets you add, pause, resume and remove tickers, choose signal period 9/10, set the
@@ -37,10 +53,13 @@ paste a ticker list or rich text copied from an AGU-PULSE screener, review the p
 confirm the new setups. Existing symbols are skipped, duplicates are reported, and symbols are
 never paused or removed automatically when they leave the screener.
 
-The scanner keeps the raw sequence state internally, but Telegram notifications are filtered by
-`SCANNER_MIN_QUALITY` (default `3` of `4`). A ticker can produce at most one 620 sequence alert
-per New York session; it becomes eligible again on the next session. This reduces repeated chop
-without changing the underlying EMA/MACD calculation.
+The scanner keeps the raw sequence state internally. A PBA early alert requires an established
+base low, three rising histogram readings into the cross, a green recovery through the previous
+bar high, a close in the upper 35% of its range and risk within the configured limit. The
+four-point continuation score remains diagnostic and `SCANNER_MIN_QUALITY` (default `3` of `4`)
+can still admit a later EMA confirmation when the early geometry was absent. A ticker can
+produce at most one accepted 620 sequence per New York session; filtered or invalidated raw
+crosses no longer consume that session.
 
 For one-click screener capture, drag the **Importar Screener PULSE con un clic** link from the
 panel to Chrome's bookmarks bar. When clicked on any PULSE screener it reads the visible cards,
@@ -140,7 +159,14 @@ For a fresh Cloudflare account or manual deployment, use the steps below.
 
 The cron runs one minute after every 5-minute boundary on weekdays and immediately exits
 outside the New York scanner window. The last 15:55 bar is processed at approximately 16:01.
-Early-close sessions are included in the bundled 2026â€“2031 market calendar.
+Early-close sessions are included in the bundled 2026–2031 market calendar.
+New or reset setups are warmed in bounded batches (`SCANNER_WARMUP_BATCH_SIZE`, default `3`)
+so a large bulk import cannot exhaust a single Worker invocation. Deferred setups remain queued
+and are initialized automatically by subsequent cycles without emitting historical alerts.
+An explicitly forced cycle may complete this silent warm-up outside RTH; stale historical bars
+remain forbidden for every already-initialized setup.
+The enabled watchlist limit is controlled by `SCANNER_SETUP_LIMIT` and defaults to `120`.
+The PBA entry risk limit is controlled by `SCANNER_PBA_MAX_RISK_PCT` and defaults to `1.25`.
 
 Health states:
 
@@ -188,4 +214,3 @@ Bulk import payloads use the same `signalPeriod`, `confirmationWindowBars`, and 
 plus `source` (for example `PULSE Leaders`) and `text` containing the copied screener content.
 Call `/api/scanner/import/preview` first; the write endpoint requires the usual confirmation
 header and commits all new setups atomically.
-

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatArgentina,
   isRegularBarStart,
   isScannerWindow,
   latestClosedBarStart,
@@ -30,5 +31,9 @@ describe("New York scanner calendar", () => {
       "2026-08-11T13:30:00.000Z",
     );
   });
-});
 
+  it("formats user-facing timestamps in Argentina time", () => {
+    expect(formatArgentina("2026-08-11T13:30:00Z")).toBe("2026-08-11 10:30:00 ART");
+    expect(formatArgentina("2026-12-15T14:30:00Z")).toBe("2026-12-15 11:30:00 ART");
+  });
+});

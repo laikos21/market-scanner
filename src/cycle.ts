@@ -1,10 +1,16 @@
 import { fetchAlpacaBars } from "./alpaca";
-import { isRegularBarStart, isScannerWindow, latestClosedBarStart } from "./calendar";
-import { integerSetting, requireRuntimeSecrets } from "./config";
-import { markSetupStale, processClosedBars } from "./engine";
+import {
+  formatArgentina,
+  isRegularBarStart,
+  isScannerWindow,
+  latestClosedBarStart,
+} from "./calendar";
+import { integerSetting, numberSetting, requireRuntimeSecrets } from "./config";
+import { markSetupStale, MIN_WARMUP_BARS, processClosedBars } from "./engine";
 import { deliverEvent, recoverPendingDeliveries, sendTelegram } from "./notify";
 import { commitState, loadState, StateConflictError } from "./storage";
 import type {
+  Bar,
   CycleSummary,
   Env,
   EventDraft,
@@ -82,6 +88,26 @@ function fetchStart(active: ScannerSetup[], now: Date, lookbackDays: number): Da
     : new Date(now.getTime() - lookbackDays * 86_400_000);
 }
 
+export interface CycleSetupSelection {
+  incremental: ScannerSetup[];
+  warmup: ScannerSetup[];
+  deferredWarmup: number;
+}
+
+export function selectCycleSetups(
+  active: ScannerSetup[],
+  warmupBatchSize: number,
+): CycleSetupSelection {
+  const incremental = active.filter((setup) => setup.state.indicator.initialized);
+  const pendingWarmup = active.filter((setup) => !setup.state.indicator.initialized);
+  const warmup = pendingWarmup.slice(0, warmupBatchSize);
+  return {
+    incremental,
+    warmup,
+    deferredWarmup: pendingWarmup.length - warmup.length,
+  };
+}
+
 export async function runCycle(
   env: Env,
   now = new Date(),
@@ -119,24 +145,56 @@ export async function runCycle(
     3,
     14,
   );
-  const symbols = active.map((setup) => setup.symbol).sort();
-  summary.symbols = symbols.length;
-  const fetched = await fetchAlpacaBars(
-    symbols,
-    fetchStart(active, now, lookbackDays),
-    now,
-    env,
+  const warmupBatchSize = integerSetting(
+    "SCANNER_WARMUP_BATCH_SIZE",
+    env.SCANNER_WARMUP_BATCH_SIZE,
+    3,
+    1,
+    20,
   );
-  summary.alpacaRequests = fetched.requests;
+  const selection = selectCycleSetups(active, warmupBatchSize);
+  const selected = [...selection.incremental, ...selection.warmup];
+  const symbols = selected.map((setup) => setup.symbol).sort();
+  summary.symbols = symbols.length;
+  const fetchedGroups = [];
+  if (selection.incremental.length) {
+    fetchedGroups.push(
+      await fetchAlpacaBars(
+        selection.incremental.map((setup) => setup.symbol),
+        fetchStart(selection.incremental, now, lookbackDays),
+        now,
+        env,
+      ),
+    );
+  }
+  if (selection.warmup.length) {
+    fetchedGroups.push(
+      await fetchAlpacaBars(
+        selection.warmup.map((setup) => setup.symbol),
+        new Date(now.getTime() - lookbackDays * 86_400_000),
+        now,
+        env,
+      ),
+    );
+  }
+  summary.alpacaRequests = fetchedGroups.reduce((total, fetched) => total + fetched.requests, 0);
+  const fetchedBars = new Map<string, Bar[]>();
+  for (const fetched of fetchedGroups) {
+    for (const [symbol, bars] of fetched.bars) fetchedBars.set(symbol, bars);
+  }
   const cutoff = latestClosedBarStart(now).getTime();
+  const warmupSymbols = new Set(selection.warmup.map((setup) => setup.symbol));
   const closedBars = new Map(
-    [...fetched.bars.entries()].map(([symbol, bars]) => [
-      symbol,
-      bars.filter((bar) => {
+    [...fetchedBars.entries()].map(([symbol, bars]) => {
+      const eligible = bars.filter((bar) => {
         const timestamp = new Date(bar.ts);
         return timestamp.getTime() <= cutoff && isRegularBarStart(timestamp);
-      }),
-    ]),
+      });
+      return [
+        symbol,
+        warmupSymbols.has(symbol) ? eligible.slice(-(MIN_WARMUP_BARS + 30)) : eligible,
+      ];
+    }),
   );
   summary.barsFetched = [...closedBars.values()].reduce((total, bars) => total + bars.length, 0);
   const staleMinutes = integerSetting(
@@ -153,10 +211,17 @@ export async function runCycle(
     1,
     4,
   );
+  const pbaMaxRiskPct = numberSetting(
+    "SCANNER_PBA_MAX_RISK_PCT",
+    env.SCANNER_PBA_MAX_RISK_PCT,
+    1.25,
+    0.25,
+    5,
+  );
   const events: EventDraft[] = [];
   const replacements = new Map<number, ScannerSetup>();
 
-  for (const setup of active) {
+  for (const setup of selected) {
     const bars = closedBars.get(setup.symbol) ?? [];
     const latest = bars.at(-1);
     if (!latest) {
@@ -165,7 +230,8 @@ export async function runCycle(
       continue;
     }
     const ageMinutes = (now.getTime() - new Date(latest.ts).getTime()) / 60_000;
-    if (!Number.isFinite(ageMinutes) || ageMinutes > staleMinutes) {
+    const historicalWarmup = force && warmupSymbols.has(setup.symbol);
+    if (!Number.isFinite(ageMinutes) || (ageMinutes > staleMinutes && !historicalWarmup)) {
       summary.stale += 1;
       replacements.set(
         setup.id,
@@ -176,7 +242,7 @@ export async function runCycle(
       );
       continue;
     }
-    const processed = processClosedBars(setup, bars, now, minQuality);
+    const processed = processClosedBars(setup, bars, now, minQuality, pbaMaxRiskPct);
     replacements.set(setup.id, processed.setup);
     summary.barsProcessed += processed.barsProcessed;
     if (processed.primed) summary.primed += 1;
@@ -190,7 +256,9 @@ export async function runCycle(
   loaded.document.setups = loaded.document.setups.map(
     (setup) => replacements.get(setup.id) ?? setup,
   );
-  summary.detail = "closed 5-minute bars evaluated and committed";
+  summary.detail = selection.deferredWarmup
+    ? `closed 5-minute bars evaluated and committed; ${selection.deferredWarmup} setup(s) queued for warm-up`
+    : "closed 5-minute bars evaluated and committed";
   summary.processingMsBeforeCommit = Math.round(performance.now() - started);
   const result = await commitSummary(env, loaded, summary, events);
   result.recoveredDeliveries = recovered.length;
@@ -214,7 +282,7 @@ export async function recordCycleFailure(
     "🔴 MarketScanner cycle failed",
     detail,
     "",
-    `Time: ${now.toISOString()}`,
+    "Time: " + formatArgentina(now.toISOString()),
   ].join("\n");
   try {
     const loaded = await loadState(env.DB);
@@ -248,7 +316,7 @@ export async function sendTestNotification(
     "🧪 MarketScanner TEST",
     "Cloudflare → D1 → Telegram funciona.",
     "No se detectó ningún setup real.",
-    `Time: ${now.toISOString()}`,
+    "Time: " + formatArgentina(now.toISOString()),
   ].join("\n");
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const loaded = await loadState(env.DB);
