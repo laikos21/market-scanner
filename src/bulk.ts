@@ -21,6 +21,8 @@ const SCREENING_WORDS = new Set([
   "DAY",
   "DEVELOPING",
   "EMA",
+  "ENTERED",
+  "EXITED",
   "EXTENDED",
   "FRI",
   "HOLD",
@@ -59,7 +61,10 @@ function cleanCandidate(value: string): string {
     .trim()
     .replace(/^[`'"$]+/, "")
     .replace(/[,';:!?`'".)]+$/, "")
-    .toUpperCase();
+    .toUpperCase()
+    // Some PULSE cards concatenate the ticker with their session status.
+    // Examples: "AAOI" + "EXITED" and "ESTC" + "ENTERED".
+    .replace(/(?:ENTERED|EXITED)$/, "");
 }
 
 function pushUnique(values: string[], value: string): void {
@@ -134,7 +139,7 @@ export interface BulkImportResult {
 }
 
 function setupLimit(env: Env): number {
-  return integerSetting("SCANNER_SETUP_LIMIT", env.SCANNER_SETUP_LIMIT, 60, 1, 100);
+  return integerSetting("SCANNER_SETUP_LIMIT", env.SCANNER_SETUP_LIMIT, 120, 1, 200);
 }
 
 function makePreview(env: Env, input: BulkImportInput, symbols: ParsedBulkSymbols, existing: ScannerSetup[]): BulkPreview {

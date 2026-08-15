@@ -78,17 +78,21 @@ export function latestClosedBarStart(now: Date): Date {
   return new Date(Math.floor((now.getTime() - fiveMinutes) / fiveMinutes) * fiveMinutes);
 }
 
-export function formatNewYork(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
+export function formatArgentina(iso: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Argentina/Buenos_Aires",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hourCycle: "h23",
-    timeZoneName: "short",
-  }).format(new Date(iso));
+  }).formatToParts(new Date(iso));
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return get("year") + "-" + get("month") + "-" + get("day") + " "
+    + get("hour") + ":" + get("minute") + ":" + get("second") + " ART";
 }
 
 export function newYorkDateKey(value: Date | string): string {

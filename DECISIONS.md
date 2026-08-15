@@ -17,9 +17,10 @@ Evaluation uses 5-minute Alpaca bars whose interval has fully closed and whose s
 the NYSE/Nasdaq regular session. The cron runs one minute after each five-minute boundary. No
 premarket, after-hours or forming-candle signal is accepted.
 
-## D4. Original 6/20/10 is the default
+## D4. PBA 6/20/9 is the default
 
-The default signal period is 10. Period 9 is explicitly supported per setup. Changing it
+The default signal period is 9, matching the documented PBA chart coordinates. Period 10 remains
+explicitly supported per setup for the Morales variant. Changing it
 resets and re-primes the indicator so values from two formulas are never mixed.
 
 ## D5. Historical priming is silent
@@ -56,12 +57,20 @@ confirm flow. The parser is tolerant of rich card copy, while the import only cr
 setups; it never pauses or deletes a ticker because a later screener refresh no longer contains
 it. This keeps the screener as a source of candidates and the scanner as the owner of alert state.
 
-## D10. Quality gate and one-sequence-per-session alert policy
+## D10. Continuation quality and one-accepted-sequence policy
 
-The original 620 calculation remains the state machine, but a Telegram alert is useful only when
-momentum has some continuation evidence. The default quality gate scores EMA20 slope, a local
-three-bar breakout, relative volume and MACD histogram strength; score 3/4 is required by
-default. A weak cross is still reflected in setup state but does not create a Telegram alert.
-After the first sequence of a New York session, later re-crosses for that ticker are suppressed
-until the next session. Both policies are conservative filters over the alert surface, not a
-claim that the signal is a complete trading thesis.
+The four-point score measures continuation evidence: EMA20 slope, a local three-bar breakout,
+relative volume and MACD histogram strength. It remains visible on every alert and a score 3/4
+is required by default only for a later EMA confirmation whose PBA early geometry was rejected.
+After the first accepted sequence of a New York session, later re-crosses for that ticker are
+suppressed until the next session. A filtered or invalidated raw cross does not consume the day.
+
+## D11. PBA early alert is defined by risk geometry
+
+The early Telegram alert models PBA's low-risk adaptation rather than mature trend confirmation.
+It requires a bullish MACD cross with EMA6 still at/below EMA20, a recent low established at
+least two bars earlier, a histogram that rose on each of the last three transitions, a green
+recovery close above the prior bar high, a close in the upper 35% of the trigger candle and
+distance to the base low no greater than `SCANNER_PBA_MAX_RISK_PCT` (default 1.25%). The base low,
+risk per share and risk percentage are included in the alert. EMA6/EMA20 remains a follow-up
+confirmation and is always reported when a PBA early alert was already delivered.

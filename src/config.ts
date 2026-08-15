@@ -13,6 +13,21 @@ export function integerSetting(
   return parsed;
 }
 
+export function numberSetting(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (raw === undefined || raw === "") return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be a number from ${minimum} to ${maximum}`);
+  }
+  return parsed;
+}
+
 export function requireRuntimeSecrets(env: {
   ALPACA_KEY_ID?: string;
   ALPACA_SECRET_KEY?: string;
@@ -29,4 +44,3 @@ export function requireRuntimeSecrets(env: {
     .map(([name]) => name);
   if (missing.length) throw new Error(`missing required secrets: ${missing.join(", ")}`);
 }
-

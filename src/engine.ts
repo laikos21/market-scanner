@@ -1,6 +1,11 @@
-import { formatNewYork, newYorkDateKey } from "./calendar";
+import { formatArgentina, newYorkDateKey } from "./calendar";
 import { advanceIndicator, emptyIndicatorState } from "./indicators";
-import { evaluateSignalQuality, type SignalQuality } from "./quality";
+import {
+  evaluatePbaEntry,
+  evaluateSignalQuality,
+  type PbaEntryQuality,
+  type SignalQuality,
+} from "./quality";
 import type {
   Bar,
   EventDraft,
@@ -16,6 +21,9 @@ export function emptyRuntimeState(): SetupRuntimeState {
     indicator: emptyIndicatorState(),
     macdCrossBarTs: null,
     macdCrossPrice: null,
+    macdCrossBaseLow: null,
+    macdCrossRiskPct: null,
+    earlyAlertSent: false,
     confirmationBarsElapsed: 0,
     triggerCount: 0,
     lastAlertAt: null,
@@ -38,6 +46,35 @@ function qualityLine(quality: SignalQuality): string {
   return `Calidad ${quality.grade} (${quality.score}/4)${readiness}: ${quality.summary}`;
 }
 
+function pbaRiskLines(pba: PbaEntryQuality): string[] {
+  if (pba.baseLow === null || pba.riskPerShare === null || pba.riskPct === null) {
+    return [`PBA low-risk: ${pba.summary}`];
+  }
+  return [
+    `Base low: ${pba.baseLow.toFixed(2)} | Riesgo: ${pba.riskPerShare.toFixed(2)} (${pba.riskPct.toFixed(2)}%)`,
+    `PBA low-risk: ${pba.summary}`,
+  ];
+}
+
+function storedRiskLines(setup: ScannerSetup): string[] {
+  const baseLow = setup.state.macdCrossBaseLow ?? null;
+  const riskPct = setup.state.macdCrossRiskPct ?? null;
+  const crossPrice = setup.state.macdCrossPrice;
+  if (baseLow === null || riskPct === null || crossPrice === null) return [];
+  return [
+    `Entrada temprana: ${crossPrice.toFixed(2)} | Base low: ${baseLow.toFixed(2)} | Riesgo: ${riskPct.toFixed(2)}%`,
+  ];
+}
+
+function clearPendingSequence(setup: ScannerSetup): void {
+  setup.state.macdCrossBarTs = null;
+  setup.state.macdCrossPrice = null;
+  setup.state.macdCrossBaseLow = null;
+  setup.state.macdCrossRiskPct = null;
+  setup.state.earlyAlertSent = false;
+  setup.state.confirmationBarsElapsed = 0;
+}
+
 function alreadyAlertedThisSession(setup: ScannerSetup, bar: Bar): boolean {
   return Boolean(
     setup.state.lastAlertAt &&
@@ -50,6 +87,7 @@ function earlyEvent(
   bar: Bar,
   now: Date,
   quality: SignalQuality,
+  pba: PbaEntryQuality,
 ): EventDraft {
   const indicator = setup.state.indicator;
   return {
@@ -60,7 +98,7 @@ function earlyEvent(
     createdAtUtc: now.toISOString(),
     price: bar.close,
     message: [
-      `🟡 620 temprano — ${setup.symbol}`,
+      `🟡 PBA 620 low-risk — ${setup.symbol}`,
       "",
       `MACD 6/20/${setup.signalPeriod} hizo bullish cross.`,
       "EMA6 todavía está debajo de EMA20.",
@@ -68,8 +106,9 @@ function earlyEvent(
       `Cierre: ${bar.close.toFixed(2)}`,
       `MACD: ${number(indicator.macd)} | Señal: ${number(indicator.signal)}`,
       `EMA6: ${number(indicator.ema6)} | EMA20: ${number(indicator.ema20)}`,
+      ...pbaRiskLines(pba),
       qualityLine(quality),
-      `Vela cerrada: ${formatNewYork(bar.ts)}`,
+      `Vela cerrada: ${formatArgentina(bar.ts)}`,
       ...contextLine(setup),
       "",
       `Esperando confirmación durante ${setup.confirmationWindowBars} velas.`,
@@ -83,6 +122,7 @@ function confirmedEvent(
   now: Date,
   sameBar: boolean,
   quality: SignalQuality,
+  pba: PbaEntryQuality | null,
 ): EventDraft {
   const indicator = setup.state.indicator;
   const elapsed = setup.state.confirmationBarsElapsed;
@@ -102,11 +142,12 @@ function confirmedEvent(
       `Cierre: ${bar.close.toFixed(2)}`,
       `MACD: ${number(indicator.macd)} | Señal: ${number(indicator.signal)}`,
       `EMA6: ${number(indicator.ema6)} | EMA20: ${number(indicator.ema20)}`,
+      ...(pba ? pbaRiskLines(pba) : storedRiskLines(setup)),
       qualityLine(quality),
       sameBar
         ? "Confirmación: ambos cruces ocurrieron en la misma vela"
         : `Confirmación: ${elapsed} vela(s) después del MACD cross`,
-      `Vela cerrada: ${formatNewYork(bar.ts)}`,
+      `Vela cerrada: ${formatArgentina(bar.ts)}`,
       ...contextLine(setup),
     ].join("\n"),
   };
@@ -124,6 +165,7 @@ export function processClosedBars(
   bars: Bar[],
   now = new Date(),
   minQuality = 0,
+  pbaMaxRiskPct = 1.25,
 ): ProcessResult {
   const setup = structuredClone(source);
   const events: EventDraft[] = [];
@@ -143,10 +185,11 @@ export function processClosedBars(
       bar.close,
       bar.ts,
       setup.signalPeriod,
-      { high: bar.high, volume: bar.volume },
+      { open: bar.open, high: bar.high, low: bar.low, volume: bar.volume },
     );
     setup.state.indicator = step.current;
     const quality = evaluateSignalQuality(setup.state.indicator, bar);
+    const pba = evaluatePbaEntry(setup.state.indicator, bar, pbaMaxRiskPct);
     setup.state.lastEvalAt = now.toISOString();
     setup.state.status = "ok";
     barsProcessed += 1;
@@ -164,9 +207,7 @@ export function processClosedBars(
       ) {
         setup.state.phase = "waiting_macd";
         setup.state.detail = "reset after momentum rolled over; waiting for a new sequence";
-        setup.state.macdCrossBarTs = null;
-        setup.state.macdCrossPrice = null;
-        setup.state.confirmationBarsElapsed = 0;
+        clearPendingSequence(setup);
       }
       continue;
     }
@@ -176,20 +217,21 @@ export function processClosedBars(
         setup.state.confirmationBarsElapsed += 1;
         setup.state.phase = "confirmed";
         setup.state.triggerCount += 1;
-        setup.state.lastAlertAt = now.toISOString();
-        const accepted = !quality.ready || quality.score >= minQuality;
+        const accepted =
+          setup.state.earlyAlertSent === true || !quality.ready || quality.score >= minQuality;
+        if (accepted) setup.state.lastAlertAt = now.toISOString();
         setup.state.detail = accepted
-          ? `620 confirmed · quality ${quality.grade}`
+          ? setup.state.earlyAlertSent === true
+            ? `PBA 620 confirmed after low-risk entry · quality ${quality.grade}`
+            : `620 confirmed · quality ${quality.grade}`
           : `620 confirmed but alert filtered by quality ${quality.grade} (${quality.score}/${4})`;
-        if (accepted) events.push(confirmedEvent(setup, bar, now, false, quality));
+        if (accepted) events.push(confirmedEvent(setup, bar, now, false, quality, null));
         continue;
       }
       if (step.bearishMacdCross) {
         setup.state.phase = "waiting_macd";
         setup.state.detail = "MACD cross invalidated before EMA confirmation";
-        setup.state.macdCrossBarTs = null;
-        setup.state.macdCrossPrice = null;
-        setup.state.confirmationBarsElapsed = 0;
+        clearPendingSequence(setup);
         continue;
       }
       setup.state.confirmationBarsElapsed += 1;
@@ -197,9 +239,7 @@ export function processClosedBars(
         setup.state.phase = "waiting_macd";
         setup.state.detail =
           `confirmation expired after ${setup.confirmationWindowBars} bars`;
-        setup.state.macdCrossBarTs = null;
-        setup.state.macdCrossPrice = null;
-        setup.state.confirmationBarsElapsed = 0;
+        clearPendingSequence(setup);
       }
       continue;
     }
@@ -213,25 +253,33 @@ export function processClosedBars(
         setup.state.phase = "confirmed";
         setup.state.macdCrossBarTs = bar.ts;
         setup.state.macdCrossPrice = bar.close;
+        setup.state.macdCrossBaseLow = pba.baseLow;
+        setup.state.macdCrossRiskPct = pba.riskPct;
+        setup.state.earlyAlertSent = false;
         setup.state.confirmationBarsElapsed = 0;
         setup.state.triggerCount += 1;
-        setup.state.lastAlertAt = now.toISOString();
-        const accepted = !quality.ready || quality.score >= minQuality;
+        const accepted = pba.eligible || !quality.ready || quality.score >= minQuality;
+        if (accepted) setup.state.lastAlertAt = now.toISOString();
         setup.state.detail = accepted
-          ? `620 confirmed in one bar · quality ${quality.grade}`
+          ? pba.eligible
+            ? `PBA 620 confirmed in one bar · risk ${pba.riskPct?.toFixed(2)}%`
+            : `620 confirmed in one bar · quality ${quality.grade}`
           : `620 confirmed in one bar but alert filtered by quality ${quality.grade} (${quality.score}/${4})`;
-        if (accepted) events.push(confirmedEvent(setup, bar, now, true, quality));
+        if (accepted) events.push(confirmedEvent(setup, bar, now, true, quality, pba));
       } else if (setup.state.indicator.ema6! <= setup.state.indicator.ema20!) {
         setup.state.phase = "waiting_ema";
         setup.state.macdCrossBarTs = bar.ts;
         setup.state.macdCrossPrice = bar.close;
+        setup.state.macdCrossBaseLow = pba.baseLow;
+        setup.state.macdCrossRiskPct = pba.riskPct;
         setup.state.confirmationBarsElapsed = 0;
-        setup.state.lastAlertAt = now.toISOString();
-        const accepted = !quality.ready || quality.score >= minQuality;
+        const accepted = pba.eligible;
+        setup.state.earlyAlertSent = accepted;
+        if (accepted) setup.state.lastAlertAt = now.toISOString();
         setup.state.detail = accepted
-          ? "bullish MACD cross; waiting for EMA6/EMA20 confirmation"
-          : `bullish MACD cross; early alert filtered by quality ${quality.grade} (${quality.score}/${4})`;
-        if (accepted) events.push(earlyEvent(setup, bar, now, quality));
+          ? `PBA low-risk cross; waiting for EMA6/EMA20 confirmation · risk ${pba.riskPct?.toFixed(2)}%`
+          : `bullish MACD cross; PBA early alert filtered: ${pba.summary}`;
+        if (accepted) events.push(earlyEvent(setup, bar, now, quality, pba));
       } else {
         setup.state.detail =
           "bullish MACD cross ignored because EMA6 was already above EMA20";

@@ -120,7 +120,7 @@ function validateSetupInput(value: unknown):
   if (!/^[A-Z0-9.\-]{1,16}$/.test(symbol)) {
     return "symbol must be an exact US equity ticker";
   }
-  const signalPeriod = body.signalPeriod === undefined ? 10 : Number(body.signalPeriod);
+  const signalPeriod = body.signalPeriod === undefined ? 9 : Number(body.signalPeriod);
   if (signalPeriod !== 9 && signalPeriod !== 10) return "signalPeriod must be 9 or 10";
   const confirmationWindowBars =
     body.confirmationWindowBars === undefined ? 6 : Number(body.confirmationWindowBars);
@@ -158,7 +158,7 @@ function validateBulkInput(value: unknown):
   const text = typeof body.text === "string" ? body.text.trim() : "";
   if (!text) return "text with ticker symbols is required";
   if (text.length > BULK_IMPORT_MAX_TEXT) return "bulk import text cannot exceed 30000 characters";
-  const signalPeriod = body.signalPeriod === undefined ? 10 : Number(body.signalPeriod);
+  const signalPeriod = body.signalPeriod === undefined ? 9 : Number(body.signalPeriod);
   if (signalPeriod !== 9 && signalPeriod !== 10) return "signalPeriod must be 9 or 10";
   const confirmationWindowBars =
     body.confirmationWindowBars === undefined ? 6 : Number(body.confirmationWindowBars);

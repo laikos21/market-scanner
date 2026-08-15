@@ -31,6 +31,18 @@ describe("bulk screener import", () => {
     expect(result.symbols).toEqual(["NTAP", "PANW", "REGN"]);
   });
 
+  it("removes the EXITED status concatenated by PULSE cards", () => {
+    const result = parseBulkSymbols("AAOIEXITED\nAEHREXITED\nAFMEXITED\nANETEXITED\nBEXITED\nEXITED");
+    expect(result.symbols).toEqual(["AAOI", "AEHR", "AFM", "ANET", "B"]);
+    expect(result.invalid).toEqual([]);
+  });
+
+  it("removes the ENTERED status concatenated by PULSE cards", () => {
+    const result = parseBulkSymbols("ESTCENTERED\nAEMENTERED\nENTERED");
+    expect(result.symbols).toEqual(["ESTC", "AEM"]);
+    expect(result.invalid).toEqual([]);
+  });
+
   it("does not treat screener labels as symbols", () => {
     const result = parseBulkSymbols("PULSE Leaders\nLIQUID Leaders\nEMA Pullback\nMOM 93");
     expect(result.symbols).toEqual([]);
